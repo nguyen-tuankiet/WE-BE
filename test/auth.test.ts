@@ -184,3 +184,12 @@ describe('sức khỏe hệ thống', () => {
     expect(res.body).toEqual({ ok: true, today: '2026-10-22' });
   });
 });
+
+describe('ping giữ máy chủ thức', () => {
+  it('GET /ping trả ok kể cả khi DB lỗi (không truy vấn DB)', async () => {
+    const { app } = await createTestApp();
+    const res = await new Client(app).get('/ping');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+});

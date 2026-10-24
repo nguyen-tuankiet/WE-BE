@@ -23,6 +23,9 @@ export function createApp(deps: Deps) {
   }
   app.use('/api/*', originGuard(deps.config));
 
+  /** Chỉ báo server còn sống, KHÔNG đụng DB: dùng cho dịch vụ ping giữ máy chủ thức (không đánh thức Neon). */
+  app.get('/ping', (c) => c.json({ ok: true }));
+
   app.get('/health', async (c) => {
     try {
       await deps.db.query('SELECT 1');
