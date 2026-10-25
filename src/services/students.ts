@@ -147,6 +147,12 @@ export async function updateStudent(db: Db, user: AuthUser, id: string, patch: S
     if (cur.rows[0].status === 'reserved' && patch.status !== undefined && activeReserve.rowCount > 0) {
       throw new AppError(422, 'STUDENT_RESERVED', 'Học viên đang bảo lưu, trạng thái được quản lý qua thủ tục bảo lưu.');
     }
+    if (patch.status === 'left' && cur.rows[0].status !== 'left') {
+      const active = await q.query("SELECT 1 FROM enrollments WHERE student_id = $1 AND status IN ('active', 'reserved')", [id]);
+      if (active.rowCount > 0) {
+        throw new AppError(422, 'STUDENT_HAS_ACTIVE_ENROLLMENTS', 'Học viên còn khóa đang học hoặc đang bảo lưu: kết thúc các khóa này trước khi đánh dấu nghỉ học.');
+      }
+    }
     const sets: string[] = [];
     const params: unknown[] = [id];
     for (const key of Object.keys(PATCH_COLUMNS) as (keyof StudentPatch)[]) {

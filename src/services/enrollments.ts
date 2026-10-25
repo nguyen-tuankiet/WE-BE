@@ -310,6 +310,97 @@ export async function createEnrollment(db: Db, today: string, input: NewEnrollme
 }
 
 
+/* ---------- Sửa khóa đăng ký ---------- */
+
+export interface EnrollmentPatch {
+  tuitionReceived?: boolean;
+  tuition?: number;
+  note?: string;
+  /** Đổi tổng số buổi: không thấp hơn số buổi đã diễn ra/đã điểm danh; các buổi chưa tới được lập lại */
+  totalSessions?: number;
+  /** Đổi ngày bắt đầu: chỉ khi khóa chưa có điểm danh, lượt bù, bảo lưu hay chuyển lớp */
+  startDate?: string;
+  /** Kết thúc khóa: bỏ các buổi chưa tới (chưa điểm danh), giữ nguyên lịch sử */
+  status?: 'completed';
+}
+
+const count = async (q: Queryable, sql: string, params: unknown[]) => (await q.query<{ n: number }>(sql, params)).rows[0].n;
+
+/**
+ * Sửa khóa đăng ký (Admin/Manager). Học phí, ghi chú, đã nhận học phí sửa tự do; số buổi, ngày bắt đầu, kết thúc khóa
+ * chỉ với khóa đang học và không bao giờ đụng vào buổi đã diễn ra hoặc đã điểm danh. Một giao dịch, có nhật ký trước/sau.
+ */
+export async function updateEnrollment(db: Db, today: string, id: string, patch: EnrollmentPatch, actorId: string): Promise<EnrollmentView> {
+  return db.tx(async (q) => {
+    const cur = await q.query<{ status: string; total_sessions: number; start_date: string; tuition: string; tuition_received: boolean; note: string }>(
+      'SELECT status, total_sessions, start_date::text AS start_date, tuition::text AS tuition, tuition_received, note FROM enrollments WHERE id = $1 FOR UPDATE',
+      [id],
+    );
+    if (cur.rowCount === 0) throw errors.notFound('Khóa đăng ký');
+    const e = cur.rows[0];
+    const structural = patch.totalSessions !== undefined || patch.startDate !== undefined || patch.status !== undefined;
+    if (structural && e.status !== 'active') {
+      throw new AppError(422, 'ENROLLMENT_NOT_ACTIVE', 'Chỉ đổi số buổi, ngày bắt đầu hoặc kết thúc khi khóa đang học (khóa bảo lưu thì xử lý qua thủ tục bảo lưu).');
+    }
+
+    if (patch.tuition !== undefined) await q.query('UPDATE enrollments SET tuition = $2, updated_at = now() WHERE id = $1', [id, patch.tuition]);
+    if (patch.tuitionReceived !== undefined) await q.query('UPDATE enrollments SET tuition_received = $2, updated_at = now() WHERE id = $1', [id, patch.tuitionReceived]);
+    if (patch.note !== undefined) await q.query('UPDATE enrollments SET note = $2, updated_at = now() WHERE id = $1', [id, patch.note.trim()]);
+
+    if (patch.startDate !== undefined && patch.startDate !== e.start_date) {
+      const locked =
+        (await count(q, 'SELECT count(*)::int AS n FROM attendance WHERE enrollment_id = $1', [id])) +
+        (await count(q, 'SELECT count(*)::int AS n FROM makeups WHERE enrollment_id = $1', [id])) +
+        (await count(q, 'SELECT count(*)::int AS n FROM reserves WHERE enrollment_id = $1', [id])) +
+        (await count(q, 'SELECT count(*)::int AS n FROM enrollment_schedule WHERE enrollment_id = $1', [id])) -
+        1;
+      if (locked > 0) {
+        throw new AppError(422, 'START_LOCKED', 'Khóa đã có điểm danh, lượt bù, bảo lưu hoặc chuyển lớp nên không đổi được ngày bắt đầu.');
+      }
+      await q.query('UPDATE enrollments SET start_date = $2::date, updated_at = now() WHERE id = $1', [id, patch.startDate]);
+      await q.query('UPDATE enrollment_schedule SET effective_from = $2::date WHERE enrollment_id = $1', [id, patch.startDate]);
+      await q.query('DELETE FROM course_sessions WHERE enrollment_id = $1', [id]);
+      await regenerateFrom(q, id, patch.startDate);
+    }
+
+    if (patch.totalSessions !== undefined && patch.totalSessions !== e.total_sessions) {
+      const held = await count(
+        q,
+        'SELECT count(*)::int AS n FROM course_sessions cs WHERE cs.enrollment_id = $1 AND (cs.date <= $2::date OR EXISTS (SELECT 1 FROM attendance a WHERE a.enrollment_id = cs.enrollment_id AND a.date = cs.date))',
+        [id, today],
+      );
+      if (patch.totalSessions < held) {
+        throw new AppError(422, 'TOTAL_BELOW_HELD', `Khóa đã có ${held} buổi diễn ra hoặc đã điểm danh, không giảm tổng số buổi xuống dưới mức này.`);
+      }
+      await q.query('UPDATE enrollments SET total_sessions = $2, updated_at = now() WHERE id = $1', [id, patch.totalSessions]);
+      await regenerateFrom(q, id, today);
+    }
+
+    if (patch.status === 'completed') {
+      const pending = await count(q, "SELECT count(*)::int AS n FROM makeups WHERE enrollment_id = $1 AND status = 'scheduled' AND date >= $2::date", [id, today]);
+      if (pending > 0) throw new AppError(422, 'HAS_SCHEDULED_MAKEUPS', 'Khóa còn lượt bù đã xếp lịch chưa tới: hủy hoặc hoàn tất các lượt bù trước khi kết thúc khóa.');
+      await q.query(
+        `DELETE FROM course_sessions cs WHERE cs.enrollment_id = $1 AND cs.date > $2::date
+            AND NOT EXISTS (SELECT 1 FROM attendance a WHERE a.enrollment_id = cs.enrollment_id AND a.date = cs.date)`,
+        [id, today],
+      );
+      await q.query("UPDATE enrollments SET status = 'completed', updated_at = now() WHERE id = $1", [id]);
+    }
+
+    await audit(q, {
+      userId: actorId,
+      entity: 'enrollment',
+      entityId: id,
+      action: 'update',
+      detail: {
+        before: { tuition: Number(e.tuition), tuitionReceived: e.tuition_received, note: e.note, totalSessions: e.total_sessions, startDate: e.start_date, status: e.status },
+        patch,
+      },
+    });
+    return getEnrollment(q, today, id);
+  });
+}
+
 /* ---------- Chuyển lớp giữa khóa ---------- */
 
 export interface TransferInput {

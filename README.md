@@ -72,6 +72,8 @@ Sau đó **xóa `BOOTSTRAP_SECRET`** khỏi `.env` (chỉ chạy được khi h�
 | GET | `/export/students.csv` | Admin/Manager | CSV UTF-8 có BOM |
 | POST | `/import/students` `{csv｜rows, dryRun}` | Admin/Manager | Nhập có đối chiếu: trùng (họ tên + ngày sinh) và dòng lỗi được báo, nhập lặp không nhân đôi |
 | GET | `/teachers` | Admin/Manager | Giáo viên đang hoạt động để chọn khi xếp lớp |
+| PATCH | `/enrollments/:id` | Admin/Manager | Sửa khóa: đã nhận học phí, học phí, ghi chú, tổng số buổi, ngày bắt đầu (khi chưa điểm danh…), `status: "completed"` kết thúc khóa. Lỗi: `TOTAL_BELOW_HELD`, `START_LOCKED`, `HAS_SCHEDULED_MAKEUPS`, `ENROLLMENT_NOT_ACTIVE` |
+| GET | `/ping` (không có tiền tố) | — | Chỉ báo còn sống, không đụng DB — dùng cho dịch vụ ping giữ Render thức |
 | GET | `/health` (không có tiền tố) | — | Kiểm tra server + DB, kèm `today` (ngày theo giờ Việt Nam) |
 
 Lỗi trả dạng `{ "error": { "code", "message", "fields?" } }` với mã ổn định (`VALIDATION`, `UNAUTHENTICATED`, `FORBIDDEN`, `INVALID_CREDENTIALS`, `TOO_MANY_ATTEMPTS`, `ACCOUNT_DISABLED`, `EMAIL_EXISTS`, `CANNOT_LOCK_SELF`, `ALREADY_BOOTSTRAPPED`, `BAD_ORIGIN`, `SESSIONS_REQUIRED`, `CLASS_FULL`, `STUDENT_LEFT`, `NO_WEEKDAYS`, `HOLIDAY_EXISTS`, `HOLIDAY_HAS_ATTENDANCE`, `FORBIDDEN_CLASS`, `EDIT_WINDOW_EXPIRED`, `FUTURE_DATE`, `OUT_OF_SCHEDULE`, `MAKEUP_LIMIT_EXCEEDED`, `MAKEUP_NOT_NOTIFIED`, `MAKEUP_EXISTS`, `MAKEUP_DATE_INVALID`, `MAKEUP_DATE_TAKEN`, `MAKEUP_NOT_YET`, `NO_MAKEUP_POLICY`, `RESERVE_ALREADY_USED`, `RESERVE_NOTICE_TOO_SHORT`, `RESERVE_STREAK_TOO_SHORT`, `RESERVE_EXPIRED`, `TRANSFER_IN_PAST`, `SAME_CLASS`, `ENROLLMENT_NOT_ACTIVE`).
